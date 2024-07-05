@@ -8,8 +8,7 @@ import json
 import threading
 import queue
 import time
-import openai
-from openai.embeddings_utils import get_embedding
+from openai import AzureOpenAI
 import tiktoken
 from tenacity import (
     retry,
@@ -18,16 +17,26 @@ from tenacity import (
     retry_if_not_exception_type,
 )
 from rich.progress import Progress
+from dotenv import load_dotenv
 
-API_KEY = os.environ["AZURE_OPENAI_API_KEY"]
-RESOURCE_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
+# import dotenv
+load_dotenv()
+
+# configure Azure OpenAI service client 
+# configure Azure OpenAI service client 
+client = AzureOpenAI(
+  azure_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"], 
+  api_key=os.environ['AZURE_OPENAI_KEY'],  
+  api_version = "2023-10-01-preview"
+  )
+
+#deployment=os.environ['OPENAI_DEPLOYMENT']
+AZURE_OPENAI_MODEL_DEPLOYMENT_NAME=os.environ['AZURE_OPENAI_DEPLOYMENT']
+AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT=os.environ['AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT']
 PROCESSING_THREADS = 6
 OPENAI_REQUEST_TIMEOUT = 60
 
-openai.api_type = "azure"
-openai.api_key = API_KEY
-openai.api_base = RESOURCE_ENDPOINT
-openai.api_version = "2023-05-15"
+
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -36,6 +45,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-f", "--folder")
 parser.add_argument("--verbose", action="store_true")
 args = parser.parse_args()
+# add a args values for testing purpose
+args = parser.parse_args(["-f", "transcripts_the_ai_show", "--verbose"])
+
+
 if args.verbose:
     logger.setLevel(logging.DEBUG)
 
@@ -77,13 +90,18 @@ def normalize_text(s, sep_token=" \n "):
 
 @retry(
     wait=wait_random_exponential(min=6, max=30),
-    stop=stop_after_attempt(20),
-    retry=retry_if_not_exception_type(openai.InvalidRequestError),
+    stop=stop_after_attempt(20)
 )
 def get_text_embedding(text: str):
     """get the embedding for a text"""
 
-    embedding = get_embedding(text, engine="text-embedding-ada-002", timeout=60)
+    
+    response = client.embeddings.create(
+        input=text,
+        model=AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT,
+    )
+    embedding = response.data[0].embedding
+    # print(response)
     return embedding
 
 
@@ -156,6 +174,10 @@ output_segments.sort(key=lambda x: (x["videoId"], convert_time_to_seconds(x["sta
 logger.debug("Total segments processed: %s", len(output_segments))
 
 # save the embeddings to a json file
-output_file = os.path.join(TRANSCRIPT_FOLDER, "output", "master_enriched.json")
+output_file = os.path.join(TRANSCRIPT_FOLDER, "output", "master_enriched1.json")
 with open(output_file, "w", encoding="utf-8") as f:
     json.dump(output_segments, f)
+
+
+
+

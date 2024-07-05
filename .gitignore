@@ -162,3 +162,4 @@ cython_debug/
 node_modules/
 
 .DS_Store
+08-building-search-applications/scripts/transcripts_the_ai_show/*

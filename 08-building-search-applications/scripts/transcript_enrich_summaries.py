@@ -1,12 +1,13 @@
 """ Summarize a youtube transcript using chatgpt"""
 
 import json
+import random
 import os
 import queue
 import threading
 import logging
 import argparse
-import openai
+from openai import AzureOpenAI
 from tenacity import (
     retry,
     wait_random_exponential,
@@ -14,20 +15,26 @@ from tenacity import (
     retry_if_not_exception_type,
 )
 from rich.progress import Progress
+from dotenv import load_dotenv
 
-API_KEY = os.environ["AZURE_OPENAI_API_KEY"]
-RESOURCE_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
-AZURE_OPENAI_MODEL_DEPLOYMENT_NAME = os.getenv(
-    "AZURE_OPENAI_MODEL_DEPLOYMENT_NAME", "gpt-35-turbo"
-)
+# import dotenv
+load_dotenv()
+
+# configure Azure OpenAI service client 
+# configure Azure OpenAI service client 
+client = AzureOpenAI(
+  azure_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"], 
+  api_key=os.environ['AZURE_OPENAI_KEY'],  
+  api_version = "2023-10-01-preview"
+  )
+
+#deployment=os.environ['OPENAI_DEPLOYMENT']
+AZURE_OPENAI_MODEL_DEPLOYMENT_NAME=os.environ['AZURE_OPENAI_DEPLOYMENT']
+
 MAX_TOKENS = 512
 PROCESSOR_THREADS = 10
 OPENAI_REQUEST_TIMEOUT = 30
 
-openai.api_type = "azure"
-openai.api_key = API_KEY
-openai.api_base = RESOURCE_ENDPOINT
-openai.api_version = "2023-07-01-preview"
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
@@ -36,6 +43,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--verbose", action="store_true")
 parser.add_argument("-f", "--folder")
 args = parser.parse_args()
+
+# set the args value for the testing purpose
+
+args = parser.parse_args(["-f", "transcripts_the_ai_show", "--verbose"])
+
+
+
 
 TRANSCRIPT_FOLDER = args.folder if args.folder else None
 if not TRANSCRIPT_FOLDER:
@@ -72,8 +86,7 @@ counter = Counter()
 
 @retry(
     wait=wait_random_exponential(min=10, max=45),
-    stop=stop_after_attempt(20),
-    retry=retry_if_not_exception_type(openai.InvalidRequestError),
+    stop=stop_after_attempt(20)
 )
 def chatgpt_summary(text):
     """generate a summary using chatgpt"""
@@ -86,22 +99,28 @@ def chatgpt_summary(text):
         {"role": "user", "content": text},
     ]
 
-    response = openai.ChatCompletion.create(
-        engine=AZURE_OPENAI_MODEL_DEPLOYMENT_NAME,
+    response = client.chat.completions.create(
+        model=AZURE_OPENAI_MODEL_DEPLOYMENT_NAME,
         messages=messages,
         temperature=0.7,
         max_tokens=MAX_TOKENS,
         top_p=0.0,
         frequency_penalty=0,
         presence_penalty=0,
-        stop=None,
-        request_timeout=OPENAI_REQUEST_TIMEOUT,
+        stop=None
     )
 
-    # print(response)
+    print(response)
 
-    text = response.get("choices", [])[0].get("message", {}).get("content", text)
-    finish_reason = response.get("choices", [])[0].get("finish_reason", "")
+    text = response.choices[0].message.content
+    completion_tokens = response.usage.completion_tokens
+    logger.debug("Completion tokens: %s", completion_tokens)
+    prompt_tokens = response.usage.prompt_tokens
+    logger.debug("Prompt tokens: %s", prompt_tokens)
+    total_tokens = completion_tokens + prompt_tokens
+    logger.debug("Total tokens: %s", total_tokens)
+
+    finish_reason = response.choices[0].finish_reason
 
     # print(finish_reason)
     if finish_reason != "stop":
@@ -135,14 +154,15 @@ def process_queue(progress, task):
         #     continue
 
         # get a summary of the text using chatgpt
-        try:
-            summary = chatgpt_summary(text)
-        except openai.InvalidRequestError as invalid_request_error:
-            logger.warning("Error: %s", invalid_request_error)
-            summary = text
-        except Exception as e:
-            logger.warning("Error: %s", e)
-            summary = text
+        summary = chatgpt_summary(text)
+        # try:
+        #     summary = chatgpt_summary(text)
+        # except openai.InvalidRequestError as invalid_request_error:
+        #     logger.warning("Error: %s", invalid_request_error)
+        #     summary = text
+        # except Exception as e:
+        #     logger.warning("Error: %s", e)
+        #     summary = text
 
         count = counter.increment()
         progress.update(task, advance=1)
@@ -162,7 +182,13 @@ input_file = os.path.join(TRANSCRIPT_FOLDER, "output", "master_transcriptions.js
 with open(input_file, "r", encoding="utf-8") as f:
     segments = json.load(f)
 
+# take random 10 segments for testing from total segments
+segments = random.sample(segments, 10)
+
 total_segments = len(segments)
+
+
+
 
 logger.debug("Total segments to be processed: %s", len(segments))
 
@@ -170,6 +196,10 @@ logger.debug("Total segments to be processed: %s", len(segments))
 q = queue.Queue()
 for segment in segments:
     q.put(segment)
+# ## take the first 50 elements and put it in a new quque for testing
+# q1 = queue.Queue()
+# for i in range(50):
+#     q1.put(q.get())
 
 with Progress() as progress:
     task1 = progress.add_task("[purple]Enriching Summaries...", total=total_segments)

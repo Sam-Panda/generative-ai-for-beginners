@@ -34,6 +34,9 @@ parser.add_argument("-f", "--folder")
 parser.add_argument("-p", "--playlist")
 parser.add_argument("--verbose", action="store_true")
 args = parser.parse_args()
+# manually store the args for the testing 
+args = parser.parse_args(["-f", "transcripts_the_ai_show", "-p", "PLlrxD0HtieHi0mwteKBOfEeOYf0LJU4O1", "--verbose"])
+
 if args.verbose:
     logger.setLevel(logging.DEBUG)
 
@@ -174,8 +177,6 @@ for i in range(PROCESSING_THREADS):
 
 # wait for all threads to finish
 for t in threads:
-    t.join()
 
-
-finish_time = time.time()
-logger.debug("Total time taken: %s", finish_time - start_time)
+    finish_time = time.time()
+    logger.debug("Total time taken: %s", finish_time - start_time)

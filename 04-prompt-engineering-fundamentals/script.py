@@ -29,7 +29,7 @@ def get_completion(prompt):
 
 ### 1. Set primary content or prompt text
 text = f"""
-oh say can you see
+what is ALgebra
 """
 
 ### 2. Use that in the prompt template below

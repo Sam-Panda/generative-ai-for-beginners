@@ -32,8 +32,14 @@ args = parser.parse_args()
 if args.verbose:
     logger.setLevel(logging.DEBUG)
 
+# create the args manually for the testing
+args = parser.parse_args(["-f", "transcripts_the_ai_show", "-m", "5", "--verbose"])
+
 TRANSCRIPT_FOLDER = args.folder if args.folder else None
 SEGMENT_LENGTH_MINUTES = int(args.minutes) if args.minutes else SEGMENT_LENGTH_MINUTES
+
+
+
 
 if not TRANSCRIPT_FOLDER:
     logger.error("Transcript folder not provided")

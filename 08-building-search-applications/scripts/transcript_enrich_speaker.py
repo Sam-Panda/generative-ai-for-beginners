@@ -9,7 +9,8 @@ import queue
 import time
 import argparse
 import openai
-from openai.embeddings_utils import get_embedding
+from openai import AzureOpenAI
+# from openai.embeddings_utils import get_embedding
 from rich.progress import Progress
 from tenacity import (
     retry,
@@ -19,31 +20,44 @@ from tenacity import (
 )
 
 
+from dotenv import load_dotenv
+
+# import dotenv
+load_dotenv()
+
+# configure Azure OpenAI service client 
+# configure Azure OpenAI service client 
+client = AzureOpenAI(
+  azure_endpoint = os.environ["AZURE_OPENAI_ENDPOINT"], 
+  api_key=os.environ['AZURE_OPENAI_KEY'],  
+  api_version = "2023-10-01-preview"
+  )
+
+#deployment=os.environ['OPENAI_DEPLOYMENT']
+AZURE_OPENAI_MODEL_DEPLOYMENT_NAME=os.environ['AZURE_OPENAI_DEPLOYMENT']
+
+
+
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-API_KEY = os.environ["AZURE_OPENAI_API_KEY"]
-RESOURCE_ENDPOINT = os.environ["AZURE_OPENAI_ENDPOINT"]
 TRANSCRIPT_FOLDER = "transcripts"
 PROCESSING_THREADS = 10
 SEGMENT_MIN_LENGTH_MINUTES = 3
 OPENAI_REQUEST_TIMEOUT = 60
 
 OPENAI_MAX_TOKENS = 512
-AZURE_OPENAI_MODEL_DEPLOYMENT_NAME = os.getenv(
-    "AZURE_OPENAI_MODEL_DEPLOYMENT_NAME", "gpt-35-turbo"
-)
 
 
-openai.api_type = "azure"
-openai.api_key = API_KEY
-openai.api_base = RESOURCE_ENDPOINT
-openai.api_version = "2023-07-01-preview"
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-f", "--folder")
 parser.add_argument("--verbose", action="store_true")
 args = parser.parse_args()
+
+# manually store the args for the testing 
+args = parser.parse_args(["-f", "transcripts_the_ai_show", "--verbose"])
 if args.verbose:
     logger.setLevel(logging.DEBUG)
 
@@ -52,23 +66,28 @@ if not TRANSCRIPT_FOLDER:
     logger.error("Transcript folder not provided")
     exit(1)
 
-get_speaker_name = {
-    "name": "get_speaker_name",
-    "description": "Get the speaker names for the session.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "speakers": {
-                "type": "string",
-                "description": "The speaker names.",
-            }
-        },
-        "required": ["speaker_name"],
-    },
-}
+get_speaker_name = [
+    {
+    "type": "function",
+        "function": {
+            "name": "get_speaker_name",
+            "description": "Get the speaker names for the session.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "speakers": {
+                        "type": "string",
+                        "description": "The speaker names.",
+                    }
+                },
+            "required": ["speakers"],
+            },
+        }
+    }
+]
 
 
-openai_functions = [get_speaker_name]
+openai_functions = get_speaker_name
 
 
 # these maps are used to make the function name string to the function call
@@ -99,39 +118,42 @@ counter = Counter()
 
 @retry(
     wait=wait_random_exponential(min=6, max=10),
-    stop=stop_after_attempt(4),
-    retry=retry_if_not_exception_type(openai.InvalidRequestError),
+    stop=stop_after_attempt(4)
 )
 def get_speaker_info(text):
     """Gets the OpenAI functions from the text."""
 
     function_name = None
     arguments = None
+    message = [
+                    {
+                        "role": "system",
+                        "content": "You are an AI assistant that can extract speaker names from text as a list of comma separated names. Try and extract the speaker names from the title. Speaker names are usually less than 3 words long.",
+                    },
+                    {"role": "user", "content": text},
+                ]
+    # print (f"Message in get_speaker_info method: {message}")
+    response_1 = client.chat.completions.create(
+                model=AZURE_OPENAI_MODEL_DEPLOYMENT_NAME,
+                messages=message,
+                tools=openai_functions,
+                tool_choice="auto",
+                temperature=0.0
 
-    response_1 = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo-0613",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are an AI assistant that can extract speaker names from text as a list of comma separated names. Try and extract the speaker names from the title. Speaker names are usually less than 3 words long.",
-            },
-            {"role": "user", "content": text},
-        ],
-        functions=openai_functions,
-        max_tokens=OPENAI_MAX_TOKENS,
-        engine=AZURE_OPENAI_MODEL_DEPLOYMENT_NAME,
-        request_timeout=OPENAI_REQUEST_TIMEOUT,
-        function_call={"name": "get_speaker_name"},
-        temperature=0.0,
     )
 
     # The assistant's response includes a function call. We extract the arguments from this function call
 
-    result = response_1.get("choices")[0].get("message")
+    result = response_1.choices[0].message
+    print (f"model response: {result}")
 
-    if result.get("function_call"):
-        function_name = result.get("function_call").get("name")
-        arguments = json.loads(result.get("function_call").get("arguments"))
+    # handle the function call
+    if result.tool_calls:
+        for tool_call in result.tool_calls:
+            if tool_call.function.name == "get_speaker_name":
+                arguments = json.loads(tool_call.function.arguments)
+                print (f"Function arguments: {arguments}")  
+                function_name = tool_call.function.name 
 
     return function_name, arguments
 
@@ -192,7 +214,7 @@ def process_queue(progress, task):
             base_text = 'The title is: ' +  metadata['title'] + " " + metadata["description"] + " " + get_first_segment(filename)
             # replace new line with empty string
             base_text = base_text.replace("\n", " ")
-
+            # print(f"Base Text: {base_text}")
             function_name, arguments = get_speaker_info(base_text)
             speakers = arguments.get("speakers", "")
             if speakers == "":
@@ -217,6 +239,13 @@ folder = os.path.join(TRANSCRIPT_FOLDER, "*.json")
 for filename in glob.glob(folder):
     # load the json file
     q.put(filename)
+
+# # create a new queue with the first element from the q for the testing
+# q1 = queue.Queue()
+# # take the first 10 elements from the q and put it in the q1
+# for i in range(10):
+#     q1.put(q.get())
+
 
 
 logger.debug("Starting speaker name update. Files to be processed: %s", q.qsize())
